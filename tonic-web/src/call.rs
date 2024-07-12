@@ -186,16 +186,18 @@ where
                         ))))
                     }
                     Some(Ok(_)) => {
-                        return Poll::Ready(Some(Err(internal_error("unexpected frame type"))))
+                        unreachable!("unexpected frame type")
                     }
                     Some(Err(e)) => return Poll::Ready(Some(Err(internal_error(e)))),
                     None => {
                         return if this.buf.has_remaining() {
                             Poll::Ready(Some(Err(internal_error("malformed base64 request"))))
-                        } else if let Some(trailers) = this.trailers.take() {
-                            Poll::Ready(Some(Ok(Frame::trailers(trailers))))
                         } else {
-                            Poll::Ready(None)
+                            if let Some(trailers) = this.trailers.take() {
+                                Poll::Ready(Some(Ok(Frame::trailers(trailers))))
+                            } else {
+                                Poll::Ready(None)
+                            }
                         }
                     }
                 }
@@ -219,7 +221,9 @@ where
                 let mut res = frame.into_data().unwrap();
 
                 if *this.encoding == Encoding::Base64 {
-                    res = crate::util::base64::STANDARD.encode(res).into();
+                    let mut buf = BytesMut::with_capacity(res.len());
+                    buf.put_slice(&res);
+                    res = crate::util::base64::STANDARD.encode(buf).into();
                 }
 
                 Poll::Ready(Some(Ok(Frame::data(res))))
@@ -232,7 +236,7 @@ where
                 }
                 Poll::Ready(Some(Ok(Frame::data(frame.into()))))
             }
-            Some(Ok(_)) => Poll::Ready(Some(Err(internal_error("unexpected frame type")))),
+            Some(Ok(_)) => unreachable!("unexpected frame type"),
             Some(Err(e)) => Poll::Ready(Some(Err(internal_error(e)))),
             None => Poll::Ready(None),
         }
@@ -250,7 +254,7 @@ where
     fn poll_frame(
         mut self: Pin<&mut Self>,
         cx: &mut Context<'_>,
-    ) -> Poll<Option<Result<Frame<Self::Data>, Self::Error>>> {
+    ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
         if self.client && self.direction == Direction::Decode {
             let mut me = self.as_mut();
 
@@ -264,14 +268,7 @@ where
                     }
                     Some(Ok(incoming_buf)) if incoming_buf.is_trailers() => {
                         let trailers = incoming_buf.into_trailers().unwrap();
-                        match me.as_mut().project().trailers {
-                            Some(current_trailers) => {
-                                current_trailers.extend(trailers);
-                            }
-                            None => {
-                                me.as_mut().project().trailers.replace(trailers);
-                            }
-                        }
+                        me.as_mut().project().trailers.replace(trailers);
                         continue;
                     }
                     Some(Ok(_)) => unreachable!("unexpected frame type"),
@@ -297,10 +294,12 @@ where
 
                         if msg_buf.has_remaining() {
                             Poll::Ready(Some(Ok(Frame::data(msg_buf))))
-                        } else if let Some(trailers) = me.as_mut().project().trailers.take() {
-                            Poll::Ready(Some(Ok(Frame::trailers(trailers))))
                         } else {
-                            Poll::Ready(None)
+                            if let Some(trailers) = me.as_mut().project().trailers.take() {
+                                Poll::Ready(Some(Ok(Frame::trailers(trailers))))
+                            } else {
+                                Poll::Ready(None)
+                            }
                         }
                     }
                     FindTrailers::IncompleteBuf => continue,

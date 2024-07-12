@@ -4,7 +4,6 @@ use super::compression::{
 use super::{BufferSettings, EncodeBuf, Encoder, DEFAULT_MAX_SEND_MESSAGE_SIZE, HEADER_SIZE};
 use crate::{Code, Status};
 use bytes::{BufMut, Bytes, BytesMut};
-use http::HeaderMap;
 use http_body::{Body, Frame};
 use pin_project::pin_project;
 use std::{
@@ -74,7 +73,6 @@ where
     max_message_size: Option<usize>,
     buf: BytesMut,
     uncompression_buf: BytesMut,
-    error: Option<Status>,
 }
 
 impl<T, U> EncodedBytes<T, U>
@@ -113,7 +111,6 @@ where
             max_message_size,
             buf,
             uncompression_buf,
-            error: None,
         }
     }
 }
@@ -133,13 +130,8 @@ where
             max_message_size,
             buf,
             uncompression_buf,
-            error,
         } = self.project();
         let buffer_settings = encoder.buffer_settings();
-
-        if let Some(status) = error.take() {
-            return Poll::Ready(Some(Err(status)));
-        }
 
         loop {
             match source.as_mut().poll_next(cx) {
@@ -170,11 +162,7 @@ where
                     }
                 }
                 Poll::Ready(Some(Err(status))) => {
-                    if buf.is_empty() {
-                        return Poll::Ready(Some(Err(status)));
-                    }
-                    *error = Some(status);
-                    return Poll::Ready(Some(Ok(buf.split_to(buf.len()).freeze())));
+                    return Poll::Ready(Some(Err(status)));
                 }
             }
         }
@@ -240,13 +228,13 @@ fn finish_encoding(
         return Err(Status::new(
             Code::OutOfRange,
             format!(
-                "Error, encoded message length too large: found {} bytes, the limit is: {} bytes",
+                "Error, message length too large: found {} bytes, the limit is: {} bytes",
                 len, limit
             ),
         ));
     }
 
-    if len > u32::MAX as usize {
+    if len > std::u32::MAX as usize {
         return Err(Status::resource_exhausted(format!(
             "Cannot return body with more than 4GB of data but got {len} bytes"
         )));
@@ -308,37 +296,12 @@ where
     }
 }
 
-impl EncodeState {
-    fn trailers(&mut self) -> Option<Result<HeaderMap, Status>> {
-        match self.role {
-            Role::Client => None,
-            Role::Server => {
-                if self.is_end_stream {
-                    return None;
-                }
-
-                self.is_end_stream = true;
-                let status = if let Some(status) = self.error.take() {
-                    status
-                } else {
-                    Status::new(Code::Ok, "")
-                };
-                Some(status.to_header_map())
-            }
-        }
-    }
-}
-
 impl<S> Body for EncodeBody<S>
 where
     S: Stream<Item = Result<Bytes, Status>>,
 {
     type Data = Bytes;
     type Error = Status;
-
-    fn is_end_stream(&self) -> bool {
-        self.state.is_end_stream
-    }
 
     fn poll_frame(
         self: Pin<&mut Self>,
@@ -354,11 +317,26 @@ where
                     Some(Ok(Frame::trailers(status.to_header_map()?))).into()
                 }
             },
-            None => self_proj
-                .state
-                .trailers()
-                .map(|t| t.map(Frame::trailers))
-                .into(),
+            None => match self_proj.state.role {
+                Role::Client => None.into(),
+                Role::Server => {
+                    if self_proj.state.is_end_stream {
+                        None.into()
+                    } else {
+                        self_proj.state.is_end_stream = true;
+                        let status = if let Some(status) = self_proj.state.error.take() {
+                            status
+                        } else {
+                            Status::new(Code::Ok, "")
+                        };
+                        Some(Ok(Frame::trailers(status.to_header_map()?))).into()
+                    }
+                }
+            },
         }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.state.is_end_stream
     }
 }

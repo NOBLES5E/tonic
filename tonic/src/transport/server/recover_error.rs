@@ -1,6 +1,6 @@
 use crate::Status;
 use http::Response;
-use http_body::Frame;
+use http_body::{Body, Frame, SizeHint};
 use pin_project::pin_project;
 use std::{
     future::Future,
@@ -92,9 +92,9 @@ impl<B> MaybeEmptyBody<B> {
     }
 }
 
-impl<B> http_body::Body for MaybeEmptyBody<B>
+impl<B> Body for MaybeEmptyBody<B>
 where
-    B: http_body::Body + Send,
+    B: Body + Send,
 {
     type Data = B::Data;
     type Error = B::Error;
@@ -116,10 +116,10 @@ where
         }
     }
 
-    fn size_hint(&self) -> http_body::SizeHint {
+    fn size_hint(&self) -> SizeHint {
         match &self.inner {
-            Some(body) => body.size_hint(),
-            None => http_body::SizeHint::with_exact(0),
+            Some(b) => b.size_hint(),
+            None => SizeHint::default(),
         }
     }
 }

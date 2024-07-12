@@ -1,6 +1,5 @@
-#[cfg(feature = "tls")]
-use super::service::TlsAcceptor;
-use super::{service::ServerIo, Connected};
+use super::{Connected, Server};
+use crate::transport::service::ServerIo;
 use std::{
     net::{SocketAddr, TcpListener as StdTcpListener},
     pin::{pin, Pin},
@@ -16,8 +15,9 @@ use tokio_stream::{Stream, StreamExt};
 use tracing::warn;
 
 #[cfg(not(feature = "tls"))]
-pub(crate) fn tcp_incoming<IO, IE>(
+pub(crate) fn tcp_incoming<IO, IE, L>(
     incoming: impl Stream<Item = Result<IO, IE>>,
+    _server: Server<L>,
 ) -> impl Stream<Item = Result<ServerIo<IO>, crate::Error>>
 where
     IO: AsyncRead + AsyncWrite + Connected + Unpin + Send + 'static,
@@ -33,9 +33,9 @@ where
 }
 
 #[cfg(feature = "tls")]
-pub(crate) fn tcp_incoming<IO, IE>(
+pub(crate) fn tcp_incoming<IO, IE, L>(
     incoming: impl Stream<Item = Result<IO, IE>>,
-    tls: Option<TlsAcceptor>,
+    server: Server<L>,
 ) -> impl Stream<Item = Result<ServerIo<IO>, crate::Error>>
 where
     IO: AsyncRead + AsyncWrite + Connected + Unpin + Send + 'static,
@@ -49,7 +49,7 @@ where
         loop {
             match select(&mut incoming, &mut tasks).await {
                 SelectOutput::Incoming(stream) => {
-                    if let Some(tls) = &tls {
+                    if let Some(tls) = &server.tls {
                         let tls = tls.clone();
                         tasks.spawn(async move {
                             let io = tls.accept(stream).await?;
@@ -126,8 +126,8 @@ enum SelectOutput<A> {
 #[derive(Debug)]
 pub struct TcpIncoming {
     inner: TcpListenerStream,
-    nodelay: bool,
-    keepalive: Option<Duration>,
+    tcp_keepalive_timeout: Option<Duration>,
+    tcp_nodelay: bool,
 }
 
 impl TcpIncoming {
@@ -164,30 +164,30 @@ impl TcpIncoming {
     /// # }
     pub fn new(
         addr: SocketAddr,
-        nodelay: bool,
-        keepalive: Option<Duration>,
+        tcp_nodelay: bool,
+        tcp_keepalive_timeout: Option<Duration>,
     ) -> Result<Self, crate::Error> {
         let std_listener = StdTcpListener::bind(addr)?;
         std_listener.set_nonblocking(true)?;
-
+        //TODO: set SO_NODELAY and SO_KEEPALIVE, reqiures socket2 crate
         let inner = TcpListenerStream::new(TcpListener::from_std(std_listener)?);
         Ok(Self {
             inner,
-            nodelay,
-            keepalive,
+            tcp_nodelay,
+            tcp_keepalive_timeout,
         })
     }
 
     /// Creates a new `TcpIncoming` from an existing `tokio::net::TcpListener`.
     pub fn from_listener(
         listener: TcpListener,
-        nodelay: bool,
-        keepalive: Option<Duration>,
+        tcp_nodelay: bool,
+        tcp_keepalive_timeout: Option<Duration>,
     ) -> Result<Self, crate::Error> {
         Ok(Self {
             inner: TcpListenerStream::new(listener),
-            nodelay,
-            keepalive,
+            tcp_nodelay,
+            tcp_keepalive_timeout,
         })
     }
 }
@@ -198,7 +198,7 @@ impl Stream for TcpIncoming {
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         match ready!(Pin::new(&mut self.inner).poll_next(cx)) {
             Some(Ok(stream)) => {
-                set_accepted_socket_options(&stream, self.nodelay, self.keepalive);
+                set_accept_socketoptions(&stream, self.tcp_nodelay, self.tcp_keepalive_timeout);
                 Some(Ok(stream)).into()
             }
             other => Poll::Ready(other),
@@ -207,14 +207,18 @@ impl Stream for TcpIncoming {
 }
 
 // Consistent with hyper-0.14, this function does not return an error.
-fn set_accepted_socket_options(stream: &TcpStream, nodelay: bool, keepalive: Option<Duration>) {
-    if nodelay {
+fn set_accept_socketoptions(
+    stream: &TcpStream,
+    tcp_nodelay: bool,
+    tcp_keepalive_timeout: Option<Duration>,
+) {
+    if tcp_nodelay {
         if let Err(e) = stream.set_nodelay(true) {
             warn!("error trying to set TCP nodelay: {}", e);
         }
     }
 
-    if let Some(timeout) = keepalive {
+    if let Some(timeout) = tcp_keepalive_timeout {
         let sock_ref = socket2::SockRef::from(&stream);
         let sock_keepalive = socket2::TcpKeepalive::new().with_time(timeout);
 

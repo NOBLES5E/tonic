@@ -1,11 +1,13 @@
-use bencher::{benchmark_group, benchmark_main, Bencher};
-use bytes::{Buf, BufMut, Bytes, BytesMut};
-use http_body::{Body, Frame, SizeHint};
 use std::{
     fmt::{Error, Formatter},
     pin::Pin,
     task::{Context, Poll},
 };
+
+use bencher::{benchmark_group, benchmark_main, Bencher};
+use bytes::{Buf, BufMut, Bytes, BytesMut};
+use http_body::{Body, Frame, SizeHint};
+
 use tonic::{codec::DecodeBuf, codec::Decoder, Status, Streaming};
 
 macro_rules! bench {

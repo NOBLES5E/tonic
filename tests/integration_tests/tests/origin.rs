@@ -5,13 +5,15 @@ use std::task::Context;
 use std::task::Poll;
 use std::time::Duration;
 use tokio::sync::oneshot;
-use tonic::codegen::http::Request;
 use tonic::{
+    body::BoxBody,
     transport::{Endpoint, Server},
-    Response, Status,
+    Status,
 };
 use tower::Layer;
 use tower::Service;
+
+type Request<B = BoxBody> = http::Request<B>;
 
 #[tokio::test]
 async fn writes_origin_header() {
@@ -22,8 +24,8 @@ async fn writes_origin_header() {
         async fn unary_call(
             &self,
             _req: tonic::Request<Input>,
-        ) -> Result<Response<Output>, Status> {
-            Ok(Response::new(Output {}))
+        ) -> Result<tonic::Response<Output>, Status> {
+            Ok(tonic::Response::new(Output {}))
         }
     }
 
@@ -76,9 +78,9 @@ struct OriginService<S> {
     inner: S,
 }
 
-impl<T> Service<Request<tonic::body::BoxBody>> for OriginService<T>
+impl<T> Service<Request> for OriginService<T>
 where
-    T: Service<Request<tonic::body::BoxBody>>,
+    T: Service<Request>,
     T::Future: Send + 'static,
     T::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
 {
@@ -90,7 +92,7 @@ where
         self.inner.poll_ready(cx).map_err(Into::into)
     }
 
-    fn call(&mut self, req: Request<tonic::body::BoxBody>) -> Self::Future {
+    fn call(&mut self, req: Request) -> Self::Future {
         assert_eq!(req.uri().host(), Some("docs.rs"));
         let fut = self.inner.call(req);
 

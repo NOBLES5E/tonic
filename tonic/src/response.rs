@@ -1,6 +1,4 @@
-use http::Extensions;
-
-use crate::metadata::MetadataMap;
+use crate::{metadata::MetadataMap, Extensions};
 
 /// A gRPC response and metadata from an RPC call.
 #[derive(Debug)]
@@ -75,7 +73,7 @@ impl<T> Response<T> {
         Response {
             metadata: MetadataMap::from_headers(head.headers),
             message,
-            extensions: head.extensions,
+            extensions: Extensions::from_http(head.extensions),
         }
     }
 
@@ -84,7 +82,7 @@ impl<T> Response<T> {
 
         *res.version_mut() = http::Version::HTTP_2;
         *res.headers_mut() = self.metadata.into_sanitized_headers();
-        *res.extensions_mut() = self.extensions;
+        *res.extensions_mut() = self.extensions.into_http();
 
         res
     }
@@ -121,6 +119,7 @@ impl<T> Response<T> {
     /// server streams. Response streams (server to client stream and bidirectional streams) will
     /// still be compressed according to the configuration of the server.
     #[cfg(feature = "gzip")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "gzip")))]
     pub fn disable_compression(&mut self) {
         self.extensions_mut()
             .insert(crate::codec::compression::SingleMessageCompressionOverride::Disable);

@@ -17,9 +17,9 @@
 //! # Feature Flags
 //!
 //! - `transport`: Enables the fully featured, batteries included client and server
-//! implementation based on [`hyper`], [`tower`] and [`tokio`]. Enabled by default.
-//! - `server`: Enables just the full featured server portion of the `transport` feature.
-//! - `channel`: Enables just the full featured channel portion of the `transport` feature.
+//!     implementation based on [`hyper`], [`tower`] and [`tokio`]. Enabled by default.
+//! - `channel`: Enables just the full featured channel/client portion of the `transport`
+//!     feature.
 //! - `codegen`: Enables all the required exports and optional dependencies required
 //! for [`tonic-build`]. Enabled by default.
 //! - `tls`: Enables the `rustls` based TLS options for the `transport` feature. Not
@@ -78,6 +78,7 @@
 //! [flate2]: https://crates.io/crates/flate2
 
 #![recursion_limit = "256"]
+#![allow(clippy::inconsistent_struct_constructor)]
 #![warn(
     missing_debug_implementations,
     missing_docs,
@@ -88,10 +89,10 @@
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/tokio-rs/website/master/public/img/icons/tonic.svg"
 )]
-#![doc(html_root_url = "https://docs.rs/tonic/0.12.0")]
+#![doc(html_root_url = "https://docs.rs/tonic/0.11.0")]
 #![doc(issue_tracker_base_url = "https://github.com/hyperium/tonic/issues/")]
 #![doc(test(no_crate_inject, attr(deny(rust_2018_idioms))))]
-#![cfg_attr(docsrs, feature(doc_auto_cfg))]
+#![cfg_attr(docsrs, feature(doc_cfg))]
 
 pub mod body;
 pub mod client;
@@ -100,7 +101,8 @@ pub mod metadata;
 pub mod server;
 pub mod service;
 
-#[cfg(any(feature = "server", feature = "channel"))]
+#[cfg(feature = "transport")]
+#[cfg_attr(docsrs, doc(cfg(feature = "transport")))]
 pub mod transport;
 
 mod extensions;
@@ -112,12 +114,12 @@ mod util;
 
 /// A re-export of [`async-trait`](https://docs.rs/async-trait) for use with codegen.
 #[cfg(feature = "codegen")]
+#[cfg_attr(docsrs, doc(cfg(feature = "codegen")))]
 pub use async_trait::async_trait;
 
 #[doc(inline)]
 pub use codec::Streaming;
-pub use extensions::GrpcMethod;
-pub use http::Extensions;
+pub use extensions::{Extensions, GrpcMethod};
 pub use request::{IntoRequest, IntoStreamingRequest, Request};
 pub use response::Response;
 pub use status::{Code, Status};
@@ -126,6 +128,7 @@ pub(crate) type Error = Box<dyn std::error::Error + Send + Sync>;
 
 #[doc(hidden)]
 #[cfg(feature = "codegen")]
+#[cfg_attr(docsrs, doc(cfg(feature = "codegen")))]
 pub mod codegen;
 
 /// `Result` is a type that represents either success ([`Ok`]) or failure ([`Err`]).

@@ -212,7 +212,7 @@ mod tests {
         let expected = Status::new(
             Code::OutOfRange,
             format!(
-                "Error, decoded message length too large: found {} bytes, the limit is: {} bytes",
+                "Error, message length too large: found {} bytes, the limit is: {} bytes",
                 msg.len(),
                 MAX_MESSAGE_SIZE
             ),

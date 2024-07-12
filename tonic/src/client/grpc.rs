@@ -1,5 +1,4 @@
 use crate::codec::compression::{CompressionEncoding, EnabledCompressionEncodings};
-use crate::metadata::GRPC_CONTENT_TYPE;
 use crate::{
     body::BoxBody,
     client::GrpcService,
@@ -160,7 +159,7 @@ impl<T> Grpc<T> {
         self
     }
 
-    /// Limits the maximum size of an encoded message.
+    /// Limits the maximum size of an ecoded message.
     ///
     /// # Example
     ///
@@ -405,7 +404,7 @@ impl GrpcConfig {
         // Set the content type
         request
             .headers_mut()
-            .insert(CONTENT_TYPE, GRPC_CONTENT_TYPE);
+            .insert(CONTENT_TYPE, HeaderValue::from_static("application/grpc"));
 
         #[cfg(any(feature = "gzip", feature = "zstd"))]
         if let Some(encoding) = self.send_compression_encodings {

@@ -4,7 +4,8 @@ use hyper_util::rt::{TokioExecutor, TokioIo};
 use hyper_util::server::conn::auto::Builder;
 use hyper_util::service::TowerToHyperService;
 use tokio::net::TcpListener;
-use tonic::{service::Routes, Request, Response, Status};
+// use tonic::transport::server::TowerToHyperService;
+use tonic::{transport::Server, Request, Response, Status};
 
 use hello_world::greeter_server::{Greeter, GreeterServer};
 use hello_world::{HelloReply, HelloRequest};
@@ -39,7 +40,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("GreeterServer listening on {}", addr);
 
     let incoming = TcpListener::bind(addr).await?;
-    let svc = Routes::new(GreeterServer::new(greeter));
+    let svc = Server::builder()
+        .add_service(GreeterServer::new(greeter))
+        .into_router();
 
     let h2c = h2c::H2c { s: svc };
 
@@ -49,10 +52,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let router = h2c.clone();
                 tokio::spawn(async move {
                     let builder = Builder::new(TokioExecutor::new());
-                    let conn = builder.serve_connection_with_upgrades(
-                        TokioIo::new(io),
-                        TowerToHyperService::new(router),
-                    );
+                    let conn = builder
+                        .serve_connection(TokioIo::new(io), TowerToHyperService::new(router));
                     let _ = conn.await;
                 });
             }
@@ -69,8 +70,8 @@ mod h2c {
     use http::{Request, Response};
     use hyper::body::Incoming;
     use hyper_util::{rt::TokioExecutor, service::TowerToHyperService};
-    use tonic::body::{empty_body, BoxBody};
-    use tower::{Service, ServiceExt};
+    use tonic::{body::empty_body, transport::AxumBoxBody};
+    use tower::Service;
 
     #[derive(Clone)]
     pub struct H2c<S> {
@@ -81,12 +82,12 @@ mod h2c {
 
     impl<S> Service<Request<Incoming>> for H2c<S>
     where
-        S: Service<Request<BoxBody>, Response = Response<BoxBody>> + Clone + Send + 'static,
+        S: Service<Request<Incoming>, Response = Response<AxumBoxBody>> + Clone + Send + 'static,
         S::Future: Send + 'static,
         S::Error: Into<BoxError> + Sync + Send + 'static,
         S::Response: Send + 'static,
     {
-        type Response = hyper::Response<BoxBody>;
+        type Response = hyper::Response<tonic::body::BoxBody>;
         type Error = hyper::Error;
         type Future =
             Pin<Box<dyn std::future::Future<Output = Result<Self::Response, Self::Error>> + Send>>;
@@ -98,12 +99,8 @@ mod h2c {
             std::task::Poll::Ready(Ok(()))
         }
 
-        fn call(&mut self, req: hyper::Request<Incoming>) -> Self::Future {
-            let mut req = req.map(tonic::body::boxed);
-            let svc = self
-                .s
-                .clone()
-                .map_request(|req: Request<_>| req.map(tonic::body::boxed));
+        fn call(&mut self, mut req: hyper::Request<Incoming>) -> Self::Future {
+            let svc = self.s.clone();
             Box::pin(async move {
                 tokio::spawn(async move {
                     let upgraded_io = hyper::upgrade::on(&mut req).await.unwrap();

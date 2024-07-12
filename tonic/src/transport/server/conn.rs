@@ -1,12 +1,13 @@
 use std::net::SocketAddr;
-use tokio::net::TcpStream;
-
 #[cfg(feature = "tls")]
 use std::sync::Arc;
-#[cfg(feature = "tls")]
-use tokio_rustls::rustls::pki_types::CertificateDer;
+
+use tokio::net::TcpStream;
 #[cfg(feature = "tls")]
 use tokio_rustls::server::TlsStream;
+
+#[cfg(feature = "tls")]
+use crate::transport::Certificate;
 
 /// Trait that connected IO resources implement and use to produce info about the connection.
 ///
@@ -113,9 +114,12 @@ where
         let (inner, session) = self.get_ref();
         let inner = inner.connect_info();
 
-        let certs = session
-            .peer_certificates()
-            .map(|certs| certs.to_owned().into());
+        let certs = if let Some(certs) = session.peer_certificates() {
+            let certs = certs.iter().map(Certificate::from_pem).collect();
+            Some(Arc::new(certs))
+        } else {
+            None
+        };
 
         TlsConnectInfo { inner, certs }
     }
@@ -129,13 +133,15 @@ where
 ///
 /// [ext]: crate::Request::extensions
 #[cfg(feature = "tls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
 #[derive(Debug, Clone)]
 pub struct TlsConnectInfo<T> {
     inner: T,
-    certs: Option<Arc<Vec<CertificateDer<'static>>>>,
+    certs: Option<Arc<Vec<Certificate>>>,
 }
 
 #[cfg(feature = "tls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
 impl<T> TlsConnectInfo<T> {
     /// Get a reference to the underlying connection info.
     pub fn get_ref(&self) -> &T {
@@ -148,7 +154,7 @@ impl<T> TlsConnectInfo<T> {
     }
 
     /// Return the set of connected peer TLS certificates.
-    pub fn peer_certs(&self) -> Option<Arc<Vec<CertificateDer<'static>>>> {
+    pub fn peer_certs(&self) -> Option<Arc<Vec<Certificate>>> {
         self.certs.clone()
     }
 }

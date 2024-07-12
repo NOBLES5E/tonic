@@ -1,21 +1,19 @@
 //! Client implementation and builder.
 
 mod endpoint;
-pub(crate) mod service;
 #[cfg(feature = "tls")]
+#[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
 mod tls;
 
 pub use endpoint::Endpoint;
 #[cfg(feature = "tls")]
 pub use tls::ClientTlsConfig;
 
-use self::service::{Connection, DynamicServiceStream, Executor, SharedExec};
-use crate::body::BoxBody;
+use super::service::{Connection, DynamicServiceStream, SharedExec};
+use crate::transport::Executor;
+use crate::transport::{Request, Response};
 use bytes::Bytes;
-use http::{
-    uri::{InvalidUri, Uri},
-    Request, Response,
-};
+use http::uri::{InvalidUri, Uri};
 use hyper_util::client::legacy::connect::Connection as HyperConnection;
 use std::{
     fmt,
@@ -35,8 +33,7 @@ use tower::{
     Service,
 };
 
-type BoxFuture<'a, T> = Pin<Box<dyn Future<Output = T> + Send + 'a>>;
-type Svc = Either<Connection, BoxService<Request<BoxBody>, Response<BoxBody>, crate::Error>>;
+type Svc = Either<Connection, BoxService<Request, Response, crate::Error>>;
 
 const DEFAULT_BUFFER_SIZE: usize = 1024;
 
@@ -65,14 +62,14 @@ const DEFAULT_BUFFER_SIZE: usize = 1024;
 /// cloning the `Channel` type is cheap and encouraged.
 #[derive(Clone)]
 pub struct Channel {
-    svc: Buffer<Svc, Request<BoxBody>>,
+    svc: Buffer<Svc, Request>,
 }
 
 /// A future that resolves to an HTTP response.
 ///
 /// This is returned by the `Service::call` on [`Channel`].
 pub struct ResponseFuture {
-    inner: buffer::future::ResponseFuture<<Svc as Service<Request<BoxBody>>>::Future>,
+    inner: buffer::future::ResponseFuture<<Svc as Service<Request>>::Future>,
 }
 
 impl Channel {
@@ -186,7 +183,7 @@ impl Channel {
         D: Discover<Service = Connection> + Unpin + Send + 'static,
         D::Error: Into<crate::Error>,
         D::Key: Hash + Send + Clone,
-        E: Executor<BoxFuture<'static, ()>> + Send + Sync + 'static,
+        E: Executor<crate::transport::BoxFuture<'static, ()>> + Send + Sync + 'static,
     {
         let svc = Balance::new(discover);
 
@@ -198,8 +195,8 @@ impl Channel {
     }
 }
 
-impl Service<http::Request<BoxBody>> for Channel {
-    type Response = http::Response<BoxBody>;
+impl Service<Request> for Channel {
+    type Response = Response;
     type Error = super::Error;
     type Future = ResponseFuture;
 
@@ -207,7 +204,7 @@ impl Service<http::Request<BoxBody>> for Channel {
         Service::poll_ready(&mut self.svc, cx).map_err(super::Error::from_source)
     }
 
-    fn call(&mut self, request: http::Request<BoxBody>) -> Self::Future {
+    fn call(&mut self, request: Request) -> Self::Future {
         let inner = Service::call(&mut self.svc, request);
 
         ResponseFuture { inner }
@@ -215,7 +212,7 @@ impl Service<http::Request<BoxBody>> for Channel {
 }
 
 impl Future for ResponseFuture {
-    type Output = Result<Response<BoxBody>, super::Error>;
+    type Output = Result<Response, super::Error>;
 
     fn poll(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         let val = ready!(Pin::new(&mut self.inner).poll(cx)).map_err(super::Error::from_source)?;

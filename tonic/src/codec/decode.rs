@@ -36,14 +36,14 @@ struct StreamingInner {
 
 impl<T> Unpin for Streaming<T> {}
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 enum State {
     ReadHeader,
     ReadBody {
         compression: Option<CompressionEncoding>,
         len: usize,
     },
-    Error(Status),
+    Error,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -184,7 +184,7 @@ impl StreamingInner {
                 return Err(Status::new(
                     Code::OutOfRange,
                     format!(
-                        "Error, decoded message length too large: found {} bytes, the limit is: {} bytes",
+                        "Error, message length too large: found {} bytes, the limit is: {} bytes",
                         len, limit
                     ),
                 ));
@@ -248,7 +248,7 @@ impl StreamingInner {
                     return Poll::Ready(Ok(None));
                 }
 
-                let _ = std::mem::replace(&mut self.state, State::Error(status.clone()));
+                let _ = std::mem::replace(&mut self.state, State::Error);
                 debug!("decoder inner stream error: {:?}", status);
                 return Poll::Ready(Err(status));
             }
@@ -262,15 +262,7 @@ impl StreamingInner {
                     Ok(Some(()))
                 }
                 frame if frame.is_trailers() => {
-                    match &mut self.trailers {
-                        Some(trailers) => {
-                            trailers.extend(frame.into_trailers().unwrap());
-                        }
-                        None => {
-                            self.trailers = Some(frame.into_trailers().unwrap());
-                        }
-                    }
-
+                    self.trailers = Some(frame.into_trailers().unwrap());
                     Ok(None)
                 }
                 frame => panic!("unexpected frame: {:?}", frame),
@@ -291,11 +283,13 @@ impl StreamingInner {
 
     fn response(&mut self) -> Result<(), Status> {
         if let Direction::Response(status) = self.direction {
-            if let Err(Some(e)) = crate::status::infer_grpc_status(self.trailers.as_ref(), status) {
-                // If the trailers contain a grpc-status, then we should return that as the error
-                // and otherwise stop the stream (by taking the error state)
-                self.trailers.take();
-                return Err(e);
+            if let Err(e) = crate::status::infer_grpc_status(self.trailers.as_ref(), status) {
+                if let Some(e) = e {
+                    // If the trailers contain a grpc-status, then we should return that as the error
+                    // and otherwise stop the stream (by taking the error state)
+                    self.trailers.take();
+                    return Err(e);
+                }
             }
         }
         Ok(())
@@ -393,8 +387,8 @@ impl<T> Stream for Streaming<T> {
 
     fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Option<Self::Item>> {
         loop {
-            if let State::Error(status) = &self.inner.state {
-                return Poll::Ready(Some(Err(status.clone())));
+            if let State::Error = &self.inner.state {
+                return Poll::Ready(None);
             }
 
             if let Some(item) = self.decode_chunk()? {
@@ -407,10 +401,11 @@ impl<T> Stream for Streaming<T> {
             }
         }
 
-        Poll::Ready(match self.inner.response() {
-            Ok(()) => None,
-            Err(err) => Some(Err(err)),
-        })
+        if let Err(status) = self.inner.response() {
+            return Poll::Ready(Some(Err(status)));
+        }
+
+        Poll::Ready(None)
     }
 }
 

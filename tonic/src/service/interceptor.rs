@@ -219,7 +219,7 @@ where
                 let response = status
                     .take()
                     .unwrap()
-                    .into_http()
+                    .to_http()
                     .map(|_| B::default())
                     .map(boxed);
                 Poll::Ready(Ok(response))
@@ -230,6 +230,7 @@ where
 
 #[cfg(test)]
 mod tests {
+    #[allow(unused_imports)]
     use super::*;
     use http_body::Frame;
     use http_body_util::Empty;
@@ -287,7 +288,7 @@ mod tests {
     #[tokio::test]
     async fn handles_intercepted_status_as_response() {
         let message = "Blocked by the interceptor";
-        let expected = Status::permission_denied(message).into_http();
+        let expected = Status::permission_denied(message).to_http();
 
         let svc = tower::service_fn(|_: http::Request<TestBody>| async {
             Ok::<_, Status>(http::Response::new(TestBody))

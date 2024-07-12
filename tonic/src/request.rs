@@ -1,16 +1,14 @@
 use crate::metadata::{MetadataMap, MetadataValue};
-#[cfg(feature = "server")]
+#[cfg(feature = "transport")]
 use crate::transport::server::TcpConnectInfo;
-#[cfg(all(feature = "server", feature = "tls"))]
-use crate::transport::server::TlsConnectInfo;
-use http::Extensions;
-#[cfg(feature = "server")]
+#[cfg(feature = "tls")]
+use crate::transport::{server::TlsConnectInfo, Certificate};
+use crate::Extensions;
+#[cfg(feature = "transport")]
 use std::net::SocketAddr;
-#[cfg(all(feature = "server", feature = "tls"))]
+#[cfg(feature = "tls")]
 use std::sync::Arc;
 use std::time::Duration;
-#[cfg(all(feature = "server", feature = "tls"))]
-use tokio_rustls::rustls::pki_types::CertificateDer;
 use tokio_stream::Stream;
 
 /// A gRPC request and metadata from an RPC call.
@@ -161,7 +159,7 @@ impl<T> Request<T> {
         Request {
             metadata: MetadataMap::from_headers(parts.headers),
             message,
-            extensions: parts.extensions,
+            extensions: Extensions::from_http(parts.extensions),
         }
     }
 
@@ -187,7 +185,7 @@ impl<T> Request<T> {
             SanitizeHeaders::Yes => self.metadata.into_sanitized_headers(),
             SanitizeHeaders::No => self.metadata.into_headers(),
         };
-        *request.extensions_mut() = self.extensions;
+        *request.extensions_mut() = self.extensions.into_http();
 
         request
     }
@@ -211,7 +209,8 @@ impl<T> Request<T> {
     /// This will return `None` if the `IO` type used
     /// does not implement `Connected` or when using a unix domain socket.
     /// This currently only works on the server side.
-    #[cfg(feature = "server")]
+    #[cfg(feature = "transport")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "transport")))]
     pub fn local_addr(&self) -> Option<SocketAddr> {
         let addr = self
             .extensions()
@@ -233,7 +232,8 @@ impl<T> Request<T> {
     /// This will return `None` if the `IO` type used
     /// does not implement `Connected` or when using a unix domain socket.
     /// This currently only works on the server side.
-    #[cfg(feature = "server")]
+    #[cfg(feature = "transport")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "transport")))]
     pub fn remote_addr(&self) -> Option<SocketAddr> {
         let addr = self
             .extensions()
@@ -256,8 +256,9 @@ impl<T> Request<T> {
     /// and is mostly used for mTLS. This currently only returns
     /// `Some` on the server side of the `transport` server with
     /// TLS enabled connections.
-    #[cfg(all(feature = "server", feature = "tls"))]
-    pub fn peer_certs(&self) -> Option<Arc<Vec<CertificateDer<'static>>>> {
+    #[cfg(feature = "tls")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "tls")))]
+    pub fn peer_certs(&self) -> Option<Arc<Vec<Certificate>>> {
         self.extensions()
             .get::<TlsConnectInfo<TcpConnectInfo>>()
             .and_then(|i| i.peer_certs())

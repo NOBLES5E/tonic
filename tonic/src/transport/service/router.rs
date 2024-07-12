@@ -1,9 +1,4 @@
-use crate::{
-    body::{boxed, BoxBody},
-    metadata::GRPC_CONTENT_TYPE,
-    server::NamedService,
-};
-use http::{HeaderName, HeaderValue, Request, Response};
+use crate::{body::boxed, server::NamedService, transport::BoxFuture};
 use pin_project::pin_project;
 use std::{
     convert::Infallible,
@@ -12,7 +7,9 @@ use std::{
     pin::Pin,
     task::{ready, Context, Poll},
 };
-use tower::{Service, ServiceExt};
+use tower_service::Service;
+
+use crate::transport::{Request, Response};
 
 /// A [`Service`] router.
 #[derive(Debug, Default, Clone)]
@@ -30,7 +27,7 @@ impl RoutesBuilder {
     /// Add a new service.
     pub fn add_service<S>(&mut self, svc: S) -> &mut Self
     where
-        S: Service<Request<BoxBody>, Response = Response<BoxBody>, Error = Infallible>
+        S: Service<Request, Response = Response, Error = Infallible>
             + NamedService
             + Clone
             + Send
@@ -52,7 +49,7 @@ impl Routes {
     /// Create a new routes with `svc` already added to it.
     pub fn new<S>(svc: S) -> Self
     where
-        S: Service<Request<BoxBody>, Response = Response<BoxBody>, Error = Infallible>
+        S: Service<Request, Response = Response, Error = Infallible>
             + NamedService
             + Clone
             + Send
@@ -67,7 +64,7 @@ impl Routes {
     /// Add a new service.
     pub fn add_service<S>(mut self, svc: S) -> Self
     where
-        S: Service<Request<BoxBody>, Response = Response<BoxBody>, Error = Infallible>
+        S: Service<Request, Response = Response, Error = Infallible>
             + NamedService
             + Clone
             + Send
@@ -77,16 +74,15 @@ impl Routes {
     {
         self.router = self.router.route_service(
             &format!("/{}/*rest", S::NAME),
-            svc.map_request(|req: Request<axum::body::Body>| req.map(boxed)),
+            AxumBodyService { service: svc },
         );
         self
     }
 
-    /// This makes axum perform update some internals of the router that improves perf.
-    ///
-    /// See <https://docs.rs/axum/latest/axum/routing/struct.Router.html#a-note-about-performance>
-    pub fn prepare(self) -> Self {
+    pub(crate) fn prepare(self) -> Self {
         Self {
+            // this makes axum perform update some internals of the router that improves perf
+            // see https://docs.rs/axum/latest/axum/routing/struct.Router.html#a-note-about-performance
             router: self.router.with_state(()),
         }
     }
@@ -99,18 +95,12 @@ impl Routes {
 
 async fn unimplemented() -> impl axum::response::IntoResponse {
     let status = http::StatusCode::OK;
-    let headers = [
-        (
-            HeaderName::from_static("grpc-status"),
-            HeaderValue::from_static("12"),
-        ),
-        (http::header::CONTENT_TYPE, GRPC_CONTENT_TYPE),
-    ];
+    let headers = [("grpc-status", "12"), ("content-type", "application/grpc")];
     (status, headers)
 }
 
-impl Service<Request<BoxBody>> for Routes {
-    type Response = Response<BoxBody>;
+impl Service<Request> for Routes {
+    type Response = Response;
     type Error = crate::Error;
     type Future = RoutesFuture;
 
@@ -119,7 +109,7 @@ impl Service<Request<BoxBody>> for Routes {
         Poll::Ready(Ok(()))
     }
 
-    fn call(&mut self, req: Request<BoxBody>) -> Self::Future {
+    fn call(&mut self, req: Request) -> Self::Future {
         RoutesFuture(self.router.call(req))
     }
 }
@@ -134,12 +124,39 @@ impl fmt::Debug for RoutesFuture {
 }
 
 impl Future for RoutesFuture {
-    type Output = Result<Response<BoxBody>, crate::Error>;
+    type Output = Result<Response, crate::Error>;
 
     fn poll(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<Self::Output> {
         match ready!(self.project().0.poll(cx)) {
             Ok(res) => Ok(res.map(boxed)).into(),
             Err(err) => match err {},
         }
+    }
+}
+
+#[derive(Clone)]
+struct AxumBodyService<S> {
+    service: S,
+}
+
+impl<S> Service<Request<axum::body::Body>> for AxumBodyService<S>
+where
+    S: Service<Request, Response = Response, Error = Infallible> + Clone + Send + 'static,
+    S::Future: Send + 'static,
+{
+    type Response = Response<axum::body::Body>;
+    type Error = Infallible;
+    type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
+
+    fn poll_ready(&mut self, cx: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
+        self.service.poll_ready(cx)
+    }
+
+    fn call(&mut self, req: Request<axum::body::Body>) -> Self::Future {
+        let fut = self.service.call(req.map(|body| boxed(body)));
+        Box::pin(async move {
+            fut.await
+                .map(|res| res.map(|body| axum::body::Body::new(body)))
+        })
     }
 }

@@ -4,7 +4,7 @@ use tower_layer::Layer;
 use tower_service::Service;
 
 /// Layer implementing the grpc-web protocol.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Clone)]
 pub struct GrpcWebLayer {
     _priv: (),
 }
@@ -12,7 +12,13 @@ pub struct GrpcWebLayer {
 impl GrpcWebLayer {
     /// Create a new grpc-web layer.
     pub fn new() -> GrpcWebLayer {
-        Self::default()
+        Self { _priv: () }
+    }
+}
+
+impl Default for GrpcWebLayer {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

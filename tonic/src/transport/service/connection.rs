@@ -1,12 +1,10 @@
-use super::{AddOrigin, Reconnect, SharedExec, UserAgent};
-use crate::{
-    body::{boxed, BoxBody},
-    transport::{channel::BoxFuture, service::GrpcTimeout, Endpoint},
-};
+use super::SharedExec;
+use super::{grpc_timeout::GrpcTimeout, reconnect::Reconnect, AddOrigin, UserAgent};
+use crate::body::{boxed, BoxBody};
+use crate::transport::{BoxFuture, Endpoint};
 use http::Uri;
 use hyper::rt;
 use hyper::{client::conn::http2::Builder, rt::Executor};
-use hyper_util::rt::TokioTimer;
 use std::{
     fmt,
     task::{Context, Poll},
@@ -20,8 +18,7 @@ use tower::{
 };
 use tower_service::Service;
 
-pub(crate) type Response<B = BoxBody> = http::Response<B>;
-pub(crate) type Request<B = BoxBody> = http::Request<B>;
+pub(crate) use crate::transport::{Request, Response};
 
 pub(crate) struct Connection {
     inner: BoxService<Request, Response, crate::Error>,
@@ -35,11 +32,10 @@ impl Connection {
         C::Future: Unpin + Send,
         C::Response: rt::Read + rt::Write + Unpin + Send + 'static,
     {
-        let mut settings: Builder<SharedExec> = Builder::new(endpoint.executor.clone())
+        let mut settings: Builder<super::SharedExec> = Builder::new(endpoint.executor.clone())
             .initial_stream_window_size(endpoint.init_stream_window_size)
             .initial_connection_window_size(endpoint.init_connection_window_size)
             .keep_alive_interval(endpoint.http2_keep_alive_interval)
-            .timer(TokioTimer::new())
             .clone();
 
         if let Some(val) = endpoint.http2_keep_alive_timeout {
@@ -147,18 +143,22 @@ impl tower::Service<http::Request<BoxBody>> for SendRequest {
     fn call(&mut self, req: Request) -> Self::Future {
         let fut = self.inner.send_request(req);
 
-        Box::pin(async move { fut.await.map_err(Into::into).map(|res| res.map(boxed)) })
+        Box::pin(async move {
+            fut.await
+                .map_err(Into::into)
+                .map(|res| res.map(|body| boxed(body)))
+        })
     }
 }
 
 struct MakeSendRequestService<C> {
     connector: C,
-    executor: SharedExec,
-    settings: Builder<SharedExec>,
+    executor: super::SharedExec,
+    settings: Builder<super::SharedExec>,
 }
 
 impl<C> MakeSendRequestService<C> {
-    fn new(connector: C, executor: SharedExec, settings: Builder<SharedExec>) -> Self {
+    fn new(connector: C, executor: SharedExec, settings: Builder<super::SharedExec>) -> Self {
         Self {
             connector,
             executor,

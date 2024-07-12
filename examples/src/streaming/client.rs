@@ -28,7 +28,7 @@ async fn streaming_echo(client: &mut EchoClient<Channel>, num: usize) {
     while let Some(item) = stream.next().await {
         println!("\treceived: {}", item.unwrap().message);
     }
-    // stream is dropped here and the disconnect info is sent to server
+    // stream is droped here and the disconnect info is send to server
 }
 
 async fn bidirectional_streaming_echo(client: &mut EchoClient<Channel>, num: usize) {
